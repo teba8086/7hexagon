@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>천문 현상 대칭 분석 (2020-2027)</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- JSZip -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              orbitron: ['Orbitron', 'sans-serif'],
+            },
+            colors: {
+              space: {
+                900: '#0B0D17',
+                800: '#151932',
+                700: '#1E2342',
+              },
+              eclipse: {
+                solar: '#FCD34D', 
+                lunar: '#F87171', 
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        background-color: #0B0D17;
+        color: #E2E8F0;
+        /* Mobile optimization: prevent horizontal scroll on body */
+        overflow-x: hidden; 
+      }
+      /* Custom Animations */
+      @keyframes eclipse-pulse {
+        0%, 100% { box-shadow: 0 0 10px 2px rgba(252, 211, 77, 0.5); }
+        50% { box-shadow: 0 0 20px 5px rgba(252, 211, 77, 0.8); }
+      }
+      .no-scrollbar::-webkit-scrollbar {
+          display: none;
+      }
+      .no-scrollbar {
+          -ms-overflow-style: none;  /* IE and Edge */
+          scrollbar-width: none;  /* Firefox */
+      }
+      .animate-fadeIn {
+          animation: fadeIn 0.5s ease-in-out;
+      }
+      @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-10px); }
+      }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "jszip": "https://esm.sh/jszip@^3.10.1"
+  }
+}
+</script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Application Code -->
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- 0. Utility Functions ---
+        
+        // Sound: Quiet failure if not supported
+        const playClickSound = () => {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return;
+                const ctx = new AudioContext();
+                const oscillator = ctx.createOscillator();
+                const gain = ctx.createGain();
+                oscillator.connect(gain);
+                gain.connect(ctx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(1200, ctx.currentTime);
+                gain.gain.setValueAtTime(0.05, ctx.currentTime); 
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.03); 
+                oscillator.start();
+                oscillator.stop(ctx.currentTime + 0.03);
+            } catch (e) {}
+        };
+
+        // Image Compression for Storage
+        const compressImage = (file, maxWidth = 1024, quality = 0.7) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        // Calculate new dimensions
+                        if (width > maxWidth) {
+                            height *= maxWidth / width;
+                            width = maxWidth;
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // Compress
+                        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                        resolve(dataUrl);
+                    };
+                };
+            });
+        };
+
+        // --- 1. Constants & Types ---
+        const EclipseType = {
+            SOLAR_TOTAL: 'SOLAR_TOTAL',
+            LUNAR_TOTAL: 'LUNAR_TOTAL',
+        };
+
+        const CENTER_DATE = "2024-04-08";
+        const CENTER_EVENT = {
+            id: "CENTER",
+            date: CENTER_DATE,
+            type: EclipseType.SOLAR_TOTAL,
+            description: "북미 대개기일식",
+            hebrewDate: "니산월 1일 (새해)",
+            isCenter: true
+        };
+
+        const START_BOUNDARY = {
+            id: "START_BOUND",
+            date: "2020-10-02",
+            type: EclipseType.SOLAR_TOTAL, 
+            description: "시작점",
+            hebrewDate: "초막절 (Sukkot)",
+            isHoliday: true
+        };
+
+        const END_BOUNDARY = {
+            id: "END_BOUND",
+            date: "2027-10-15",
+            type: EclipseType.SOLAR_TOTAL, 
+            description: "종료점",
+            hebrewDate: "초막절 (Sukkot)",
+            isHoliday: true
+        };
+
+        const PAIRS = [
+            {
+                id: "A",
+                left: { id: "A_L", date: "2020-12-14", type: EclipseType.SOLAR_TOTAL, description: "개기일식" },
+                right: { id: "A_R", date: "2027-08-02", type: EclipseType.SOLAR_TOTAL, description: "개기일식" },
+                diffDays: 0
+            },
+            {
+                id: "B",
+                left: { id: "B_L", date: "2021-12-04", type: EclipseType.SOLAR_TOTAL, description: "개기일식" },
+                right: { id: "B_R", date: "2026-08-12", type: EclipseType.SOLAR_TOTAL, description: "개기일식" },
+                diffDays: 0
+            },
+            {
+                id: "C",
+                left: { id: "C_L", date: "2022-05-16", type: EclipseType.LUNAR_TOTAL, description: "개기월식 (블러드문)" },
+                right: { id: "C_R", date: "2026-03-03", type: EclipseType.LUNAR_TOTAL, description: "개기월식 (블러드문)" },
+                diffDays: 0
+            },
+            {
+                id: "D",
+                left: { id: "D_L", date: "2022-11-08", type: EclipseType.LUNAR_TOTAL, description: "개기월식 (블러드문)" },
+                right: { id: "D_R", date: "2025-09-07", type: EclipseType.LUNAR_TOTAL, description: "개기월식 (블러드문)" },
+                diffDays: 0
+            }
+        ];
+
+        // --- 2. Math Utils ---
+        const calculateDaysBetween = (date1, date2) => {
+            const d1 = new Date(date1).getTime();
+            const d2 = new Date(date2).getTime();
+            return Math.round(Math.abs((d2 - d1) / (1000 * 60 * 60 * 24)));
+        };
+
+        const formatSmallNumber = (num) => {
+            if (num === 0) return "0";
+            const inverse = Math.round(1 / num);
+            return `1 / ${inverse.toLocaleString()}`;
+        };
+
+        const getLocalDateString = () => {
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const calculateProbabilities = () => {
+            const P1 = 1 / 500; 
+            const P2 = 1 / 256; 
+            const P3 = 1 / 2704;
+            return { p1: P1, p2: P2, p3: P3, final: P1 * P2 * P3 };
+        };
+
+        // --- 3. Components ---
+
+        // 3.1 Visualization Component
+        const Visualization = () => {
+            const [animate, setAnimate] = useState(false);
+            const [selectedNodeId, setSelectedNodeId] = useState(null);
+            const [hoveredNodeId, setHoveredNodeId] = useState(null);
+            const [speechMarkers, setSpeechMarkers] = useState([]);
+
+            useEffect(() => { setTimeout(() => setAnimate(true), 500); }, []);
+
+            const width = 800;
+            const height = 600;
+            const margin = { top: 60, right: 40, bottom: 80, left: 80 };
+            const graphWidth = width - margin.left - margin.right;
+            const graphHeight = height - margin.top - margin.bottom;
+
+            const centerTime = new Date(CENTER_DATE).getTime();
+            const timeBuffer = 1300 * 24 * 60 * 60 * 1000; 
+            const minTime = centerTime - timeBuffer;
+            const maxTime = centerTime + timeBuffer;
+
+            const monthLabels = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            const xStep = graphWidth / (monthLabels.length - 1);
+            const gridYears = [2021, 2022, 2023, 2024, 2025, 2026, 2027];
+
+            const getCoordinates = (dateStr) => {
+                const date = new Date(dateStr);
+                const time = date.getTime();
+                const month = date.getMonth() + 1;
+                const day = date.getDate();
+                const percentTime = (time - minTime) / (maxTime - minTime);
+                const y = margin.top + (percentTime * graphHeight);
+                let monthIndex = month >= 10 ? month - 10 : month + 2;
+                const dayFraction = (day - 1) / 30;
+                const finalIndex = monthIndex + dayFraction;
+                const x = margin.left + (finalIndex * xStep);
+                return { x, y };
+            };
+
+            const todayStr = getLocalDateString();
+            const todayDateObj = new Date(todayStr);
+
+            const handleNodeClick = (id) => {
+                playClickSound();
+                setSelectedNodeId(prev => prev === id ? null : id);
+            };
+
+            const speakDaysRemaining = () => {
+                playClickSound();
+                
+                const currentTodayStr = getLocalDateString();
+                const josephDate = "2026-03-03";
+                const raptureDate = "2026-03-27"; 
+                const passoverDate = "2026-03-31"; 
+                const eclipseDate = "2026-08-12";
+                const rapture2Date = "2026-09-20";
+
+                const dJoseph = calculateDaysBetween(currentTodayStr, josephDate);
+                const dRapture = calculateDaysBetween(currentTodayStr, raptureDate);
+                const dPassover = calculateDaysBetween(currentTodayStr, passoverDate);
+                const dEclipse = calculateDaysBetween(currentTodayStr, eclipseDate);
+                const dRapture2 = calculateDaysBetween(currentTodayStr, rapture2Date);
+
+                if (!('speechSynthesis' in window)) {
+                    alert("이 브라우저는 음성 합성을 지원하지 않습니다.");
+                    return;
+                }
+
+                window.speechSynthesis.cancel();
+                setSpeechMarkers([]);
+
+                const getVoice = () => {
+                    const voices = window.speechSynthesis.getVoices();
+                    let preferredVoice = voices.find(v => v.lang.includes('ko') && (v.name.includes('Male') || v.name.includes('Nam')));
+                    if (!preferredVoice) preferredVoice = voices.find(v => v.lang.includes('ko'));
+                    return preferredVoice;
+                };
+
+                const voice = getVoice();
+                
+                // Define steps for sequential speaking and visualization
+                const steps = [
+                    {
+                        text: `현재 위치로부터 요셉 블러드문인 3월 3일까지는 ${dJoseph}일 남았고,`,
+                        action: () => setSpeechMarkers(prev => [...prev, { id: "C_R", days: dJoseph, date: josephDate }])
+                    },
+                    {
+                        text: `첫번째 휴거예상일인 3월 27일까지는 ${dRapture}일 남았고,`,
+                        action: () => setSpeechMarkers(prev => [...prev, { id: "GHOST_RAPTURE", days: dRapture, date: raptureDate, isGhost: true, label: "3/27 휴거" }])
+                    },
+                    {
+                        text: `유월절 3월 31일까지는 ${dPassover}일 남았습니다.`,
+                        action: () => setSpeechMarkers(prev => {
+                            // Remove Rapture marker to avoid overlap
+                            const filtered = prev.filter(m => m.id !== "GHOST_RAPTURE");
+                            return [...filtered, { id: "GHOST_PASSOVER", days: dPassover, date: passoverDate, isGhost: true, label: "3/31 유월절", isGold: true }];
+                        })
+                    },
+                    {
+                        text: `8월 12일 개기일식까지는 ${dEclipse}일 남았고,`,
+                        action: () => setSpeechMarkers(prev => [...prev, { id: "B_R", days: dEclipse, date: eclipseDate }])
+                    },
+                    {
+                        text: `두번째 휴거예상일인 9월 20일까지는 ${dRapture2}일 남았습니다.`,
+                        action: () => setSpeechMarkers(prev => [...prev, { id: "GHOST_RAPTURE_2", days: dRapture2, date: rapture2Date, isGhost: true, label: "9/20 2차휴거" }])
+                    }
+                ];
+
+                let currentStepIndex = 0;
+                const playNextStep = () => {
+                    if (currentStepIndex >= steps.length) return;
+                    
+                    const step = steps[currentStepIndex];
+                    const u = new SpeechSynthesisUtterance(step.text);
+                    u.lang = 'ko-KR';
+                    u.rate = 1.0; 
+                    u.pitch = 0.8; 
+                    if (voice) u.voice = voice;
+                    
+                    u.onstart = () => {
+                        step.action();
+                    };
+
+                    u.onend = () => {
+                        currentStepIndex++;
+                        playNextStep();
+                    };
+                    
+                    window.speechSynthesis.speak(u);
+                };
+
+                playNextStep();
+            };
+
+            const getActiveState = (id) => {
+                const isHovered = hoveredNodeId === id;
+                const isSelected = selectedNodeId === id;
+                const isPartnerHovered = PAIRS.some(p => (p.left.id === hoveredNodeId && p.right.id === id) || (p.right.id === hoveredNodeId && p.left.id === id));
+                return { isHovered, isSelected, isPartnerHovered };
+            };
+
+            const renderHexagonPerimeter = () => {
+                const orderedIds = ["A_L", "C_L", "D_R", "A_R", "C_R", "D_L"];
+                const findNode = (id) => {
+                    for(const p of PAIRS) {
+                        if(p.left.id === id) return p.left;
+                        if(p.right.id === id) return p.right;
+                    }
+                    return null;
+                };
+                let pathD = "";
+                orderedIds.forEach((id, index) => {
+                    const node = findNode(id);
+                    if(node) {
+                        const { x, y } = getCoordinates(node.date);
+                        if(index === 0) pathD += `M ${x} ${y} `;
+                        else pathD += `L ${x} ${y} `;
+                    }
+                });
+                const firstNode = findNode(orderedIds[0]);
+                if(firstNode) {
+                    const {x, y} = getCoordinates(firstNode.date);
+                    pathD += `L ${x} ${y} Z`;
+                }
+                return <path d={pathD} fill="none" stroke="red" strokeWidth="1" strokeOpacity="0.2" strokeDasharray="4 4" />;
+            };
+
+            const renderConnection = (pair) => {
+                const leftCoords = getCoordinates(pair.left.date);
+                const rightCoords = getCoordinates(pair.right.date);
+                const centerCoords = getCoordinates(CENTER_DATE);
+                const isActive = hoveredNodeId === pair.left.id || hoveredNodeId === pair.right.id || selectedNodeId === pair.left.id || selectedNodeId === pair.right.id;
+                const isOthersHovered = hoveredNodeId !== null && !isActive;
+                const opacity = isActive ? 1 : (isOthersHovered ? 0.1 : 0.4);
+                const strokeColor = isActive ? "#ef4444" : "#fca5a5"; 
+                const leftDist = calculateDaysBetween(pair.left.date, CENTER_DATE);
+                const rightDist = calculateDaysBetween(CENTER_DATE, pair.right.date);
+
+                return (
+                    <g key={pair.id} className="transition-all duration-300">
+                        <line x1={leftCoords.x} y1={leftCoords.y} x2={rightCoords.x} y2={rightCoords.y} stroke={strokeColor} strokeWidth={isActive ? 3 : 1} opacity={opacity} />
+                        {isActive && (
+                            <g className="pointer-events-none">
+                                <g className="animate-fadeIn">
+                                    <rect x={(leftCoords.x + centerCoords.x)/2 - 35} y={(leftCoords.y + centerCoords.y)/2 - 14} width="70" height="28" fill="rgba(255, 255, 255, 0.9)" stroke="red" strokeWidth="2" rx="6" />
+                                    <text x={(leftCoords.x + centerCoords.x)/2} y={(leftCoords.y + centerCoords.y)/2 + 5} textAnchor="middle" fill="#b91c1c" fontSize="13" fontWeight="bold">D-{leftDist}</text>
+                                </g>
+                                <g className="animate-fadeIn">
+                                    <rect x={(rightCoords.x + centerCoords.x)/2 - 35} y={(rightCoords.y + centerCoords.y)/2 - 14} width="70" height="28" fill="rgba(255, 255, 255, 0.9)" stroke="red" strokeWidth="2" rx="6" />
+                                    <text x={(rightCoords.x + centerCoords.x)/2} y={(rightCoords.y + centerCoords.y)/2 + 5} textAnchor="middle" fill="#b91c1c" fontSize="13" fontWeight="bold">D-{rightDist}</text>
+                                </g>
+                            </g>
+                        )}
+                    </g>
+                );
+            };
+
+            const renderCurrentLocation = () => {
+                if (todayDateObj.getTime() < minTime || todayDateObj.getTime() > maxTime) return null;
+                const { x, y } = getCoordinates(todayStr);
+                return (
+                    <g className="cursor-pointer z-50 hover:scale-110 active:scale-95 transition-transform duration-300" onClick={speakDaysRemaining} onTouchEnd={(e) => { e.preventDefault(); speakDaysRemaining(); }} style={{ transformOrigin: `${x}px ${y}px` }}>
+                        <circle cx={x} cy={y} r="26" fill="#60a5fa" fillOpacity="0.2" className="animate-pulse" filter="blur(4px)" />
+                        <circle cx={x} cy={y} r="22" fill="#3b82f6" fillOpacity="0.3" filter="blur(2px)" />
+                        <circle cx={x} cy={y} r="18" fill="url(#oceanGradient)" stroke="#1e40af" strokeWidth="0.5" />
+                        <g transform={`translate(${x-18}, ${y-18}) scale(0.36)`}>
+                            <path d="M50 10 C40 10 30 20 25 30 C20 40 25 45 20 50 C15 55 10 50 10 60 C10 75 30 90 40 85 C50 80 55 70 50 60 C45 50 55 45 60 40 C65 35 80 30 70 20 C60 10 50 10 50 10 Z" fill="#15803d" opacity="0.9" />
+                        </g>
+                        <circle cx={x} cy={y} r="18" fill="url(#sphereShadow)" />
+                        <g transform={`translate(0, -32)`}>
+                            <rect x={x - 30} y={y - 10} width="60" height="20" fill="rgba(0,0,0,0.85)" rx="4" stroke="white" strokeWidth="1"/>
+                            <text x={x} y={y + 4} textAnchor="middle" fill="white" fontSize="11" fontWeight="bold">현재위치</text>
+                            <path d={`M ${x} ${y+11} L ${x-4} ${y+17} L ${x+4} ${y+17} Z`} fill="rgba(0,0,0,0.85)" transform="rotate(180, 0, 0) translate(0, 0)" /> 
+                        </g>
+                        <g transform={`translate(0, 32)`}>
+                            <rect x={x - 40} y={y - 10} width="80" height="20" fill="rgba(30, 58, 138, 0.9)" rx="10" stroke="#93c5fd" strokeWidth="1" />
+                            <text x={x} y={y + 4} textAnchor="middle" fill="white" fontSize="12" fontWeight="bold" className="font-sans">{todayStr.replace(/-/g, '/')}</text>
+                        </g>
+                    </g>
+                );
+            };
+
+            const renderGhostMarkers = () => {
+                return speechMarkers.filter(m => m.isGhost).map(marker => {
+                    const { x, y } = getCoordinates(marker.date);
+                    // Determine styles based on marker type (Gold for Passover, Purple for Rapture)
+                    const isGold = marker.isGold;
+                    const strokeColor = isGold ? "#fbbf24" : "#8b5cf6"; 
+                    const glowColor = isGold ? "#f59e0b" : "#8b5cf6";
+                    const textColor = isGold ? "#d97706" : "#5b21b6";
+                    const fillColor = isGold ? "rgba(251, 191, 36, 0.2)" : "rgba(139, 92, 246, 0.3)";
+                    const innerDotColor = isGold ? "#fcd34d" : "#a78bfa";
+                    const glowFilter = isGold ? "url(#gold-glow)" : "url(#ghost-glow)";
+
+                    return (
+                        <g key={marker.id} className="animate-fadeIn">
+                            <circle cx={x} cy={y} r="36" fill="none" stroke={strokeColor} strokeWidth="2" strokeOpacity="0.6" className="animate-pulse" strokeDasharray={isGold ? "4 2" : "0"} />
+                            <circle cx={x} cy={y} r="32" fill={fillColor} stroke={isGold ? "#fde68a" : "#ddd6fe"} strokeWidth="3" strokeDasharray="6 3" className="animate-[spin_10s_linear_infinite]" />
+                            <circle cx={x} cy={y} r="6" fill={innerDotColor} filter={glowFilter} />
+                            {marker.label && (
+                                <text x={x} y={y + 55} textAnchor="middle" fill={textColor} stroke="white" strokeWidth="4" fontSize="15" fontWeight="800" style={{ paintOrder: 'stroke', textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>{marker.label}</text>
+                            )}
+                            <g style={{ transformBox: "fill-box", transformOrigin: "center", animation: "popInSettle 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards" }}>
+                                <text x={x} y={y + 8} textAnchor="middle" fill="white" fontSize="26" fontWeight="bold" style={{ textShadow: `0 0 4px black, 0 0 8px ${glowColor}` }}>{marker.days}</text>
+                            </g>
+                        </g>
+                    )
+                });
+            };
+
+            const renderNode = (id, date, type, label) => {
+                const { x, y } = getCoordinates(date);
+                const isSolar = type === EclipseType.SOLAR_TOTAL;
+                const isCenter = type === 'CENTER';
+                const { isHovered, isSelected, isPartnerHovered } = getActiveState(id);
+                const isActive = isHovered || isSelected || isPartnerHovered;
+                const activeMarker = speechMarkers.find(m => m.id === id);
+                const isSpeakingTarget = !!activeMarker;
+                const isDimmed = (hoveredNodeId !== null && !isActive) || (selectedNodeId !== null && !isActive && hoveredNodeId === null);
+                const baseRadius = isCenter ? 25 : 22;
+                const currentRadius = isActive || isSpeakingTarget ? baseRadius + 4 : baseRadius;
+                let fillColor = isSolar ? '#000000' : '#991b1b'; 
+                if (isCenter) fillColor = '#000000';
+                if (!isSolar && (isActive || isSpeakingTarget) && !isCenter) fillColor = "#dc2626"; 
+                let filterUrl = "";
+                if (isSolar && (isActive || isSpeakingTarget)) filterUrl = "url(#solar-corona)"; 
+                else if (!isSolar && (isActive || isSpeakingTarget)) filterUrl = "url(#lunar-glow)"; 
+                else if (isCenter) filterUrl = "url(#center-glow)"; 
+
+                return (
+                    <g key={id} onClick={() => handleNodeClick(id)} onMouseEnter={() => setHoveredNodeId(id)} onMouseLeave={() => setHoveredNodeId(null)} className={`cursor-pointer transition-all duration-300 ${isDimmed && !isSpeakingTarget ? 'opacity-30 blur-[1px]' : 'opacity-100'}`} style={{ transformOrigin: `${x}px ${y}px` }}>
+                        <text x={x} y={y + currentRadius + 18} textAnchor="middle" fill={isActive || isSpeakingTarget ? "#dc2626" : "#7f1d1d"} fontSize={isActive || isSpeakingTarget ? "14" : "11"} fontWeight="bold" className="font-sans transition-all duration-300" style={{ textShadow: isActive || isSpeakingTarget ? '0 0 10px white' : 'none' }}>{date.replace(/-/g, '/')}</text>
+                        <circle cx={x} cy={y} r={currentRadius} fill={fillColor} stroke={isSolar ? ((isActive || isSpeakingTarget) ? '#fbbf24' : 'none') : '#ef4444'} strokeWidth={isSolar ? ((isActive || isSpeakingTarget) ? 2 : 0) : 2} filter={filterUrl} className="transition-all duration-300" />
+                        {activeMarker && (
+                            <g style={{ transformBox: "fill-box", transformOrigin: "center", animation: "popInSettle 1s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards" }}>
+                                <text x={x} y={y + 6} textAnchor="middle" fill="white" fontSize="18" fontWeight="bold" style={{ textShadow: '0 0 5px black, 0 0 10px black' }}>{activeMarker.days}</text>
+                            </g>
+                        )}
+                        {isCenter && (
+                            <g className="pointer-events-none">
+                                <circle cx={x} cy={y} r={currentRadius + 10} fill="none" stroke="red" strokeWidth="2" strokeDasharray="4 2" className="animate-[spin_10s_linear_infinite]" />
+                                <rect x={x - 30} y={y - 12} width="60" height="24" fill="white" fillOpacity="0.9" rx="4" stroke="black" strokeWidth="1" />
+                                <text x={x} y={y + 5} textAnchor="middle" fill="#000" fontWeight="800" fontSize="11" className="font-sans">니산월1일</text>
+                            </g>
+                        )}
+                    </g>
+                );
+            };
+
+            return (
+                <div className="w-full bg-white rounded-xl border border-gray-300 shadow-2xl p-2 flex justify-start overflow-x-auto relative min-h-[500px] md:min-h-[600px]">
+                    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto min-w-[600px] md:min-w-full" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                            <filter id="solar-corona" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur" /><feFlood floodColor="#fbbf24" result="color" /><feComposite in="color" in2="blur" operator="in" result="shadow" /><feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                            <filter id="lunar-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur" /><feColorMatrix in="blur" type="matrix" values="0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 0.6 0" result="redGlow"/><feMerge><feMergeNode in="redGlow" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                            <filter id="ghost-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" /><feFlood floodColor="#8b5cf6" result="color" /><feComposite in="color" in2="blur" operator="in" result="shadow" /><feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                            <filter id="gold-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" /><feFlood floodColor="#f59e0b" result="color" /><feComposite in="color" in2="blur" operator="in" result="shadow" /><feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                            <filter id="center-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" /><feFlood floodColor="#000000" result="color" /><feComposite in="color" in2="blur" operator="in" result="shadow" /><feMerge><feMergeNode in="shadow" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+                            <radialGradient id="oceanGradient" cx="40%" cy="40%" r="70%" fx="30%" fy="30%"><stop offset="0%" stopColor="#3b82f6" /><stop offset="100%" stopColor="#1e3a8a" /></radialGradient>
+                            <radialGradient id="sphereShadow" cx="50%" cy="50%" r="50%"><stop offset="80%" stopColor="transparent" /><stop offset="100%" stopColor="rgba(0,0,0,0.5)" /></radialGradient>
+                        </defs>
+                        {gridYears.map((year) => { const { y } = getCoordinates(`${year}-01-01`); return (y > margin.top && y < height - margin.bottom) ? <g key={`grid-y-${year}`}><line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke="#e5e7eb" strokeWidth="1" /><text x={margin.left + 5} y={y - 5} fill="#9ca3af" fontSize="10">{year}</text></g> : null; })}
+                        {monthLabels.map((_, i) => { const x = margin.left + (i * xStep); return <line key={`v-${i}`} x1={x} y1={margin.top} x2={x} y2={height - margin.bottom} stroke="#e5e7eb" strokeWidth="1" />; })}
+                        {monthLabels.map((m, i) => { const x = margin.left + (i * xStep); return <text key={`m-${i}`} x={x} y={margin.top - 15} textAnchor="middle" fill={m===1 ? 'red' : 'black'} fontSize="16" fontWeight="bold">{m}월</text>; })}
+                        {[2021, 2022, 2023, 2024, 2025, 2026, 2027].map((year, i) => { const { y } = getCoordinates(`${year}-06-01`); const labels = ["첫째인", "둘째인", "셋째인", "넷째인", "오째인", "육째인", "칠째인"]; return (y > margin.top && y < height - margin.bottom) ? <text key={`seal-${i}`} x={margin.left - 15} y={y} textAnchor="end" fill="red" fontSize="18" fontWeight="bold">{labels[i]}</text> : null; })}
+                        {renderHexagonPerimeter()}
+                        {PAIRS.map(pair => renderConnection(pair))}
+                        {PAIRS.map(pair => <React.Fragment key={`nodes-${pair.id}`}>{renderNode(pair.left.id, pair.left.date, pair.left.type, pair.left.description)}{renderNode(pair.right.id, pair.right.date, pair.right.type, pair.right.description)}</React.Fragment>)}
+                        {renderNode(CENTER_EVENT.id, CENTER_EVENT.date, 'CENTER', CENTER_EVENT.description)}
+                        {renderGhostMarkers()}
+                        {renderCurrentLocation()}
+                        <text x={width / 2} y={height - 20} textAnchor="middle" fontSize="48" fontWeight="bold" fill="black">AD 2020 ~ 2027</text>
+                    </svg>
+                    <div className="absolute bottom-4 right-4 bg-white/90 p-3 border border-gray-300 rounded shadow-lg text-sm flex flex-col gap-2 pointer-events-none">
+                        <div className="flex gap-4"><div className="flex items-center gap-2"><div className="w-5 h-5 rounded-full bg-black shadow-lg"></div><span className="text-black font-bold">개기일식</span></div><div className="flex items-center gap-2"><div className="w-5 h-5 rounded-full bg-red-700 border-2 border-red-500 shadow-lg shadow-red-500/50"></div><span className="text-black font-bold">블러드문</span></div></div>
+                        <div className="flex gap-4"><div className="flex items-center gap-2"><div className="w-5 h-5 rounded-full bg-blue-600 border border-white shadow-lg"></div><span className="text-black font-bold">현재위치</span></div><div className="flex items-center gap-2"><div className="w-5 h-5 rounded-full border-2 border-purple-500 border-dashed bg-purple-100"></div><span className="text-black font-bold">휴거예상</span></div></div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 3.2 Analysis Component
+        const Analysis = () => {
+            const [showResult, setShowResult] = useState(false);
+            const [activeTab, setActiveTab] = useState('SINGLE');
+            const [expandedId, setExpandedId] = useState(null);
+            const [activeModal, setActiveModal] = useState(null);
+            const results = calculateProbabilities();
+
+            const toggleDetail = (id) => {
+                playClickSound();
+                setExpandedId(prev => prev === id ? null : id);
+            };
+
+            // Full Width Image Uploader Component for the Timeline
+            const FullWidthTimelineUploader = ({ id, title, defaultImage }) => {
+                const [imageData, setImageData] = useState(null);
+                
+                useEffect(() => {
+                    const saved = localStorage.getItem(`timeline_full_img_${id}_v3`); // Updated key to _v3
+                    if (saved) {
+                        setImageData(saved);
+                    } else if (defaultImage) {
+                        setImageData(defaultImage);
+                    }
+                }, [id, defaultImage]);
+
+                const handleFileChange = async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                        try {
+                            const base64 = await compressImage(file, 1200, 0.75); // Compress!
+                            setImageData(base64);
+                            localStorage.setItem(`timeline_full_img_${id}_v3`, base64); // Updated key to _v3
+                        } catch (err) {
+                            console.error("Image upload failed", err);
+                            alert("이미지 처리 중 오류가 발생했습니다.");
+                        }
+                    }
+                };
+
+                return (
+                    <div className="mb-8">
+                        <div className="relative w-full bg-space-900 border-2 border-dashed border-gray-600 rounded-xl overflow-hidden hover:border-cyan-500 transition-colors group shadow-2xl min-h-[150px] md:min-h-[250px] flex items-center justify-center">
+                            {imageData ? (
+                                <img 
+                                    src={imageData.startsWith('data:') ? imageData : imageData} 
+                                    alt={title} 
+                                    className="w-full h-auto object-contain" 
+                                    onError={(e) => { 
+                                        e.currentTarget.style.display = 'none'; 
+                                        // Force clear local storage if error, as it might be stale data
+                                        localStorage.removeItem(`timeline_full_img_${id}_v3`);
+                                        e.currentTarget.nextElementSibling.style.display = 'flex';
+                                    }} 
+                                />
+                            ) : null}
+                            
+                            {/* Fallback / Placeholder UI (Initially hidden if image exists, shown on error) */}
+                            <div className="text-center p-6 text-gray-400 group-hover:text-cyan-400 transition-colors" style={{ display: imageData ? 'none' : 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
+                                <div className="text-4xl md:text-6xl mb-3">🖼️</div>
+                                <div className="font-bold text-sm md:text-lg mb-1">{title}</div>
+                                <div className="text-xs text-red-400 font-bold bg-red-900/30 px-2 py-1 rounded">
+                                    ⚠️ 연결된 파일 없음: {decodeURIComponent(defaultImage || '')}<br/>
+                                    <span className="text-gray-400 font-normal">같은 폴더에 {defaultImage} 파일이 있는지 확인해주세요.</span>
+                                </div>
+                            </div>
+
+                            <input type="file" accept="image/*" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="이미지 업로드" />
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="mt-8 max-w-5xl mx-auto pb-10">
+                    <div className="flex justify-center mb-8"><button onClick={() => { playClickSound(); setShowResult(true); }} className="group relative px-8 py-4 bg-transparent overflow-hidden rounded-md transition-all hover:scale-105 active:scale-95"><div className="absolute inset-0 w-full h-full bg-gradient-to-r from-blue-600 to-cyan-500 opacity-20 group-hover:opacity-40 transition-opacity"></div><div className="absolute inset-0 w-full h-full border border-cyan-500/50 rounded-md"></div><span className="relative text-cyan-100 font-orbitron text-xl font-bold tracking-widest flex items-center gap-2">발생 확률 분석 (RUN ANALYSIS)<svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{display: showResult ? 'none' : 'block'}}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></span></button></div>
+                    {showResult && (
+                        <div className="space-y-6 animate-fadeIn">
+                            <div className="flex justify-center gap-4 border-b border-gray-700 pb-4 mb-6"><button onClick={() => { playClickSound(); setActiveTab('SINGLE'); }} className={`px-4 py-2 rounded-t-lg font-bold transition-all ${activeTab === 'SINGLE' ? 'bg-cyan-900/40 text-cyan-300 border-b-2 border-cyan-400' : 'text-gray-500 hover:text-gray-300'}`}>① 단일 대칭 분석 (2024년)</button><button onClick={() => { playClickSound(); setActiveTab('HISTORY'); }} className={`px-4 py-2 rounded-t-lg font-bold transition-all ${activeTab === 'HISTORY' ? 'bg-purple-900/40 text-purple-300 border-b-2 border-purple-400' : 'text-gray-500 hover:text-gray-300'}`}>② 6000년 역사적 대칭 (확률 UPGRADE)</button></div>
+                            {activeTab === 'SINGLE' && (
+                                <div className="animate-fadeIn">
+                                    <div className="bg-space-800 border border-cyan-900/50 rounded-lg p-6 shadow-lg shadow-cyan-900/20 mb-6 relative overflow-hidden"><div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-cyan-400 to-blue-600"></div><h3 className="text-xl md:text-2xl font-orbitron text-white mb-2 pb-2 border-b border-gray-700 flex justify-between items-center"><span>최종 결합 확률 (Final Probability)</span></h3><div className="mb-4"><p className="text-cyan-200 font-bold mb-1">"통계적으로 가장 합리적인 보수적 추산"</p><p className="text-gray-300 text-sm leading-relaxed">단순 무작위 확률($10^-15$)이 아닌, 천체의 물리적 주기성을 고려하여 가장 보수적으로 계산해도 여전히 <span className="text-white font-bold">3억 분의 1</span>이라는 극단적인 희소성을 보입니다.</p></div><div className="flex flex-col md:flex-row items-center justify-between gap-6 bg-black/20 p-4 rounded-lg border border-white/5"><button onClick={() => { playClickSound(); setActiveModal('SINGLE_REPORT'); }} className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-cyan-300 px-4 py-2 rounded border border-slate-600 transition-all shadow-lg hover:shadow-cyan-500/20 whitespace-nowrap"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>상세 산출 과정 보고서 열기</button><div className="text-right"><div className="text-3xl md:text-5xl font-mono text-yellow-400 font-extrabold tracking-tighter drop-shadow-[0_0_20px_rgba(250,204,21,0.6)] animate-pulse">{formatSmallNumber(results.final)}</div><div className="text-lg md:text-2xl text-yellow-400 mt-2 font-mono text-right font-bold">({results.final.toFixed(10)}%) CALCULATED PROBABILITY</div></div></div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                                            <div className="bg-space-900/50 p-4 rounded border-l-4 border-yellow-500">
+                                                <h4 className="text-yellow-500 font-bold text-sm mb-2">⚡ 피부로 와닿는 비유</h4>
+                                                <ul className="text-xs text-gray-300 space-y-3 leading-relaxed">
+                                                    <li>• <strong>평생 로또를 사도 불가능한 확률:</strong> 수학적으로 3억 4천만 분의 1이라는 확률은, 814만 분의 1인 로또 1등에 당첨되는 것보다 무려 42배나 어렵습니다. 마치 백사장에서 특정 모래알 하나를 우연히 집어들 확률과 같습니다. 이것은 우연의 범주를 벗어난 '수학적 기적'입니다.</li>
+                                                    <li>• <strong>인류 역사 전체를 통틀어 단 하루:</strong> 3억 4천만 일은 약 947,000년입니다. 구석기 시대부터 지금까지 매일 하늘을 쳐다봐도 단 한 번 볼까 말까 한 천문학적 정렬이, 바로 지금 2024년 우리 눈앞에 펼쳐진 것입니다.</li>
+                                                </ul>
+                                            </div>
+                                            <div className="bg-space-900/50 p-4 rounded border-l-4 border-cyan-500">
+                                                <h4 className="text-cyan-500 font-bold text-sm mb-2">🪐 천문학적 의미 (보수적 계산)</h4>
+                                                <ul className="text-xs text-gray-300 space-y-3 leading-relaxed">
+                                                    <li>• <strong>왜 확률을 낮게 잡았나요?</strong> 일식과 월식은 무작위로 일어나지 않고 '사로스 주기'라는 정교한 톱니바퀴에 의해 움직입니다. 이 3억 분의 1이라는 수치는 그러한 천체의 주기성을 이미 '주어진 조건'으로 인정하고 최대한 보수적으로 산출한 결과입니다.</li>
+                                                    <li>• <strong>설계된 필연:</strong> 만약 천체 궤도가 정교한 시계태엽이 아니라 완전 무작위였다면 확률은 <strong>1,000조 분의 1</strong> 이하로 사라집니다. 이는 누군가 의도적으로 시공간을 조율하지 않고서는 설명하기 힘든 '설계된 필연'임을 시사합니다.</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-4 mb-8">
+                                        <div className="bg-space-700/50 border border-gray-700 p-4 rounded-lg"><div className="flex justify-between items-center"><div><h4 className="text-yellow-400 font-bold font-orbitron text-lg mb-1">조건 1: 중심 (Center)</h4><p className="text-sm text-gray-400">개기일식이 하필 유대력 새해(니산월 1일)에 발생할 확률</p><div className="font-mono text-yellow-200 mt-2 font-bold">P1 ≈ 1 / 500 (0.2%)</div></div><button onClick={() => toggleDetail(1)} className="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-600 transition-all whitespace-nowrap">{expandedId === 1 ? '간략히' : '보수적 산출 근거'}</button></div>{expandedId === 1 && (<div className="mt-4 pt-4 border-t border-gray-600 text-sm text-gray-300 bg-black/40 p-4 rounded animate-fadeIn border border-yellow-500/30"><p className="text-yellow-500 font-bold mb-2">[보수적 산출 근거]</p><ul className="list-disc list-inside space-y-1 text-gray-300"><li><span className="text-white">개기일식 빈도:</span> 약 540일(18개월)에 1회 발생</li><li><span className="text-white">니산월 1일은:</span> 1년(365일) 중 하루</li><li>단순 계산 시 약 1/500의 확률로 니산월 1일에 떨어짐</li></ul></div>)}</div>
+                                        <div className="bg-space-700/50 border border-gray-700 p-4 rounded-lg"><div className="flex justify-between items-center"><div><h4 className="text-red-400 font-bold font-orbitron text-lg mb-1">조건 2: 대칭 (Symmetry)</h4><p className="text-sm text-gray-400">4쌍의 일식/월식이 오차 없이 대칭될 확률</p><div className="font-mono text-red-200 mt-2 font-bold">P2 ≈ 1 / 256 (0.4%)</div></div><button onClick={() => toggleDetail(2)} className="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-600 transition-all whitespace-nowrap">{expandedId === 2 ? '간략히' : '보수적 산출 근거'}</button></div>{expandedId === 2 && (<div className="mt-4 pt-4 border-t border-gray-600 text-sm text-gray-300 bg-black/40 p-4 rounded animate-fadeIn border border-red-500/30"><p className="text-red-500 font-bold mb-2">[보수적 산출 근거]</p><ul className="list-disc list-inside space-y-1 text-gray-300"><li>일식 주기는 약 6개월(177일) 단위로 발생하므로 무작위보다 확률이 높음</li><li>한 쌍이 오차 없이(±1일) 대칭될 확률을 <span className="text-white font-bold">1/4(25%)로 매우 높게 가정</span></li><li>4쌍 연속 적중: (1/4) × (1/4) × (1/4) × (1/4) = 1/256</li></ul></div>)}</div>
+                                        <div className="bg-space-700/50 border border-gray-700 p-4 rounded-lg"><div className="flex justify-between items-center"><div><h4 className="text-green-400 font-bold font-orbitron text-lg mb-1">조건 3: 절기 (Holiday)</h4><p className="text-sm text-gray-400">시작과 끝(±1285일)이 모두 초막절일 확률</p><div className="font-mono text-green-200 mt-2 font-bold">P3 ≈ 1 / 2,700 (0.037%)</div></div><button onClick={() => toggleDetail(3)} className="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-600 transition-all whitespace-nowrap">{expandedId === 3 ? '간략히' : '보수적 산출 근거'}</button></div>{expandedId === 3 && (<div className="mt-4 pt-4 border-t border-gray-600 text-sm text-gray-300 bg-black/40 p-4 rounded animate-fadeIn border border-green-500/30"><p className="text-green-500 font-bold mb-2">[보수적 산출 근거]</p><ul className="list-disc list-inside space-y-1 text-gray-300"><li><span className="text-white">초막절 기간은:</span> 1년 중 약 7일</li><li>왼쪽 끝이 초막절일 확률: 7/365 ≈ 1/52</li><li>오른쪽 끝이 초막절일 확률: 7/365 ≈ 1/52</li><li>양쪽 동시 충족: (1/52) × (1/52) ≈ 1/2,704</li></ul></div>)}</div>
+                                    </div>
+                                </div>
+                            )}
+                            {activeTab === 'HISTORY' && (
+                                <div className="animate-fadeIn">
+                                    <div className="bg-gradient-to-br from-purple-900/50 to-black border border-purple-500/30 rounded-lg p-6 mb-6">
+                                        <div className="flex justify-between items-start mb-6"><div><h3 className="text-xl md:text-2xl font-orbitron text-purple-200 flex items-center gap-2"><span className="text-3xl">⏳</span> 6000년 설계론 (Divine Design)</h3><p className="text-gray-400 text-sm mt-2">우연으로는 설명할 수 없는 4000년과 2000년의 주기</p></div><button onClick={() => { playClickSound(); setActiveModal('HISTORY_REPORT'); }} className="hidden md:flex items-center gap-2 bg-purple-900/50 hover:bg-purple-800/50 text-purple-200 px-3 py-2 rounded border border-purple-500/50 transition-all text-xs"><svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>확률 및 연대 검증 보고서</button></div>
+                                        <p className="text-gray-300 mb-6 leading-relaxed text-sm md:text-base bg-black/40 p-4 rounded border-l-4 border-purple-500"><strong>"우주는 6000년 동안 이 형태를 연습(Rehearsal)해 왔습니다."</strong><br/><br/>BC 3974년과 AD 27년에도 육각도형의 천문학적 형태는 존재했지만, <span className="text-yellow-400">유대 절기(니산월/초막절)와는 일치하지 않았습니다.</span> 오직 2024년(마지막)에 이르러서야 천문 현상과 하나님의 달력이 완벽하게 포개지는 <strong>'그랜드 얼라인먼트(Grand Alignment)'</strong>가 완성됩니다.</p>
+                                        
+                                        {/* SINGLE UPLOADER FOR 4000/2000 YEAR IMAGE -> Updated to use "6.png" */}
+                                        <FullWidthTimelineUploader id="structure_timeline_full" title="6000년 역사적 대칭 구조도" defaultImage="6.png" />
+
+                                        <button onClick={() => { playClickSound(); setActiveModal('HISTORY_REPORT'); }} className="md:hidden w-full bg-purple-900/50 text-purple-200 py-3 rounded border border-purple-500/50 mb-6 flex justify-center items-center gap-2"><span className="text-xl">📜</span> [특별 보고서] 3중 연쇄 대칭 검증</button>
+                                        
+                                        <div className="bg-slate-900 border border-gray-700 rounded-lg p-4 mt-6">
+                                            <h4 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+                                                <span className="text-purple-400">📊</span> 요약 검증표
+                                            </h4>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs md:text-sm text-left text-gray-400">
+                                                    <thead className="uppercase bg-space-700/50 text-gray-300 border-b border-gray-600">
+                                                        <tr>
+                                                            <th className="px-3 py-2">검증 항목</th>
+                                                            <th className="px-3 py-2 text-gray-500">BC 3974</th>
+                                                            <th className="px-3 py-2 text-gray-500">AD 27</th>
+                                                            <th className="px-3 py-2 text-cyan-300 font-bold bg-cyan-900/20">AD 2027</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-700/50">
+                                                        <tr>
+                                                            <td className="px-3 py-3 font-bold text-white">1. 육각도형 형태</td>
+                                                            <td className="px-3 py-3 text-green-500">✓ 일치</td>
+                                                            <td className="px-3 py-3 text-green-500">✓ 일치</td>
+                                                            <td className="px-3 py-3 text-green-500 bg-cyan-900/10 font-bold">✓ 일치</td>
+                                                        </tr>
+                                                        <tr>
+                                                            <td className="px-3 py-3 font-bold text-yellow-400">2. 절기(니산월/초막절)</td>
+                                                            <td className="px-3 py-3 text-red-500">❌ 불일치</td>
+                                                            <td className="px-3 py-3 text-red-500">❌ 불일치</td>
+                                                            <td className="px-3 py-3 text-cyan-300 bg-cyan-900/20 font-bold border border-cyan-500">✅ 완벽 일치</td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {activeModal === 'SINGLE_REPORT' && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
+                            <div className="bg-space-900 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl border border-cyan-500/50 shadow-[0_0_50px_rgba(6,182,212,0.15)] relative">
+                                <div className="sticky top-0 bg-[#0B0D17] border-b border-gray-700 p-6 flex justify-between items-center z-10 shadow-md">
+                                    <h2 className="text-xl md:text-2xl font-bold text-white flex items-center gap-3 font-orbitron"><span className="text-3xl">📝</span> 상세 산출 과정 및 설명 논리 (Step-by-Step Logic)</h2><button onClick={() => { playClickSound(); setActiveModal(null); }} className="text-gray-400 hover:text-white"><svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                                </div>
+                                <div className="p-6 space-y-8 text-gray-300">
+                                    <div className="border border-yellow-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-yellow-500/10 p-3 border-b border-yellow-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-yellow-500 text-black text-xs font-bold px-2 py-1 rounded">STEP 1</span><h3 className="font-bold text-yellow-400 text-lg">중심 사건 (P1) : 1/500</h3></div><span className="font-mono text-yellow-200 font-bold text-lg">0.2%</span></div><div className="p-5"><div className="mb-4"><strong className="text-white block mb-1">Q. 왜 1/500인가?</strong><p className="text-sm leading-relaxed">"개기일식은 지구 전체로 볼 때 약 18개월(540일)에 한 번 일어납니다. 그런데 1년은 365일이고, 유대력 새해(니산월 1일)는 그 중 딱 하루입니다. 540일에 한 번 일어나는 사건이 하필 특정 하루(1/365)에 겹칠 확률을 계산하기 쉽게 아주 보수적으로 약 0.2%(1/500)로 잡았습니다."</p></div><div className="bg-black/40 p-3 rounded font-mono text-sm text-gray-400 border-l-2 border-yellow-500">Formula: 1 / 500 = 0.002</div></div></div>
+                                    <div className="border border-red-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-red-500/10 p-3 border-b border-red-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded">STEP 2</span><h3 className="font-bold text-red-400 text-lg">대칭 구조 (P2) : 1/256</h3></div><span className="font-mono text-red-200 font-bold text-lg">0.39%</span></div><div className="p-5"><div className="mb-4"><strong className="text-white block mb-1">Q. 왜 1/2,256인가?</strong><p className="text-sm leading-relaxed">"일식은 '사로스 주기' 때문에 무작위가 아니라 짝을 이룰 가능성이 있습니다. 그래서 이를 인정하고, 한 쌍이 오차 없이(±1일 이내) 완벽히 대칭될 확률을 <span className="text-white underline decoration-red-500">무려 25%(1/4)나 된다고 아주 높게 가정</span>해줬습니다. 우리는 4쌍이 모두 맞아야 하므로 1/4을 4번 곱합니다."</p></div><div className="bg-black/40 p-3 rounded font-mono text-sm text-gray-400 border-l-2 border-red-500">Formula: (1/4) × (1/4) × (1/4) × (1/4) = 1/256</div></div></div>
+                                    <div className="border border-green-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-green-500/10 p-3 border-b border-green-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-green-500 text-black text-xs font-bold px-2 py-1 rounded">STEP 3</span><h3 className="font-bold text-green-400 text-lg">절기 일치 (P3) : 1/2,704</h3></div><span className="font-mono text-green-200 font-bold text-lg">0.03%</span></div><div className="p-5"><div className="mb-4"><strong className="text-white block mb-1">Q. 왜 1/2,700인가?</strong><p className="text-sm leading-relaxed">"초막절(Sukkot)은 1년 중 <span className="text-green-400 font-bold">7일간 지속</span>됩니다. 여기서 7/365는 절기가 7개여서가 아니라, <span className="underline">초막절 기간(Duration)인 7일 안에만 들어오면 인정</span>해주는 보수적 계산(Wide Net)이기 때문입니다."</p></div><div className="bg-black/40 p-3 rounded font-mono text-sm text-gray-400 border-l-2 border-green-500">Formula: (7/365) × (7/365) ≈ 1/52 × 1/52 ≈ 1/2,704</div></div></div>
+                                    <div className="text-right border-t border-gray-700 pt-4"><div className="text-gray-500 text-xs mb-1">최종 계산 (Final Calculation)</div><div className="text-2xl font-mono text-cyan-400 font-bold">(1/500) × (1/256) × (1/2,704) ≈ 1 / 346,112,000</div></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {activeModal === 'HISTORY_REPORT' && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
+                            <div className="bg-space-900 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl border border-purple-500/50 shadow-[0_0_50px_rgba(168,85,247,0.15)] relative">
+                                <div className="sticky top-0 bg-[#0B0D17] border-b border-purple-900/50 p-6 flex justify-between items-center z-10 shadow-md">
+                                    <h2 className="text-xl md:text-2xl font-bold text-purple-300 flex items-center gap-3 font-orbitron"><span className="text-3xl">📜</span> [특별 보고서] 역사적 대칭 및 연대기 검증</h2><button onClick={() => { playClickSound(); setActiveModal(null); }} className="text-gray-400 hover:text-white"><svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                                </div>
+                                <div className="p-6 space-y-8 text-gray-300">
+                                    <p className="bg-purple-900/20 p-4 rounded border-l-4 border-purple-500 text-gray-300 text-sm">단일 대칭도 희박하지만, <strong>이 모양이 역사 속에서 정확히 4000년, 2000년 간격으로 3번 반복될 확률</strong>은 수학적 계산의 범위를 넘어섭니다. 또한 그 기간이 정확히 맞아떨어지는지 수학적으로 검증합니다.</p>
+                                    
+                                    <h3 className="text-xl font-bold text-white border-b border-gray-700 pb-2 mb-4">PART 1. 3중 연쇄 대칭 확률 분석</h3>
+                                    <div className="border border-purple-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-purple-500/10 p-3 border-b border-purple-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-purple-500 text-white text-xs font-bold px-2 py-1 rounded">FACTOR 1</span><h3 className="font-bold text-purple-300 text-lg">육각 패턴의 희소성 (Geometry)</h3></div><span className="font-mono text-purple-200 font-bold text-lg">1 / 1,000+</span></div><div className="p-5"><strong className="text-white block mb-1">Q. 7개의 천체 현상이 똑같은 모양으로 나타날 확률?</strong><p className="text-sm mb-3 text-gray-400">7년 동안 [일식-일식-월식-일식-월식-일식-일식]의 순서로 발생하며, 날짜 간격까지 비슷하여 '육각형'을 이룰 확률은 매우 낮습니다. 이를 최소한으로 잡아 1,000년에 한 번 나오는 패턴이라 가정해봅시다.</p></div></div>
+                                    <div className="border border-purple-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-purple-500/10 p-3 border-b border-purple-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-purple-500 text-white text-xs font-bold px-2 py-1 rounded">FACTOR 2</span><h3 className="font-bold text-purple-300 text-lg">정확한 주기성 (Interval)</h3></div><span className="font-mono text-purple-200 font-bold text-lg">1 / 8,000,000</span></div><div className="p-5"><strong className="text-white block mb-1">Q. 하필 4000년, 2000년 뒤인가?</strong><p className="text-sm mb-3 text-gray-400">BC 3974년 사건 이후, 정확히 4000년 뒤(AD 27)에 같은 패턴이 올 확률(1/4000)과, 그로부터 정확히 2000년 뒤(AD 2027)에 또 올 확률(1/2000)을 곱해야 합니다.</p><div className="bg-black/40 p-3 rounded font-mono text-sm text-gray-400 border-l-2 border-purple-500">Calculation: (1/4000) × (1/2000) = 1 / 8,000,000</div></div></div>
+                                    <div className="border border-cyan-500/30 bg-space-800/50 rounded-lg overflow-hidden"><div className="bg-cyan-500/10 p-3 border-b border-cyan-500/30 flex justify-between items-center"><div className="flex items-center gap-2"><span className="bg-cyan-500 text-black text-xs font-bold px-2 py-1 rounded">FINAL</span><h3 className="font-bold text-cyan-400 text-lg">그랜드 얼라인먼트 (The Alignment)</h3></div><span className="font-mono text-cyan-200 font-bold text-lg">Unique</span></div><div className="p-5"><strong className="text-white block mb-1">Q. 왜 2024년이 마지막인가?</strong><p className="text-sm mb-3 text-gray-400">앞선 두 번(BC 3974, AD 27)은 형태는 같았으나 <span className="text-red-400">절기(유월절/초막절)와는 맞지 않았습니다.</span> 오직 세 번째인 2024-2027 사이클에서만 형태와 절기가 완벽하게 일치합니다.</p></div></div>
+                                    
+                                    <h3 className="text-xl font-bold text-white border-b border-gray-700 pb-2 mb-4 mt-8">PART 2. 연대기 기간 정밀 검증 (Period Verification)</h3>
+                                    <p className="text-gray-400 text-sm mb-4">역사적 사건 사이의 기간이 정확히 4000년과 2000년으로 떨어지는지 수학적으로 검증합니다. (역사에는 '0년'이 존재하지 않음을 고려해야 합니다.)</p>
+                                    <div className="bg-space-800/50 border border-purple-500/30 rounded-lg overflow-hidden"><div className="bg-purple-900/30 p-4 border-b border-purple-500/30 flex justify-between items-center"><h3 className="font-bold text-purple-200 text-lg flex items-center gap-2"><span className="bg-purple-500 text-white text-xs px-2 py-1 rounded">1구간</span>BC 3974 (창조) ~ AD 27 (십자가)</h3><span className="font-mono text-purple-300 font-bold text-xl">4000년</span></div><div className="p-6"><div className="flex flex-col md:flex-row items-center justify-center gap-4 text-center md:text-left mb-4"><div className="bg-black/40 p-4 rounded-lg border border-gray-700 w-full"><div className="text-gray-500 text-xs mb-1">BC 연도</div><div className="text-2xl font-mono text-white">3974</div></div><div className="text-gray-500 text-2xl font-bold">+</div><div className="bg-black/40 p-4 rounded-lg border border-gray-700 w-full"><div className="text-gray-500 text-xs mb-1">AD 연도</div><div className="text-2xl font-mono text-white">27</div></div><div className="text-gray-500 text-2xl font-bold">-</div><div className="bg-black/40 p-4 rounded-lg border border-gray-700 w-full relative"><div className="text-gray-500 text-xs mb-1">0년 보정</div><div className="text-2xl font-mono text-red-400">1</div><div className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded">중요</div></div><div className="text-gray-500 text-2xl font-bold">=</div><div className="bg-purple-900/40 p-4 rounded-lg border border-purple-500 w-full"><div className="text-purple-300 text-xs mb-1">총 기간</div><div className="text-3xl font-mono text-white font-bold">4000</div></div></div><p className="text-sm text-gray-400 text-center">* 기원전(BC) 1년 다음은 기원후(AD) 1년입니다. 역사에는 0년이 없으므로, 기간 계산 시 1년을 빼주어야 정확한 햇수가 나옵니다.<br/>(3974 + 27 - 1 = 4000)</p></div></div>
+                                    <div className="bg-space-800/50 border border-cyan-500/30 rounded-lg overflow-hidden"><div className="bg-cyan-900/30 p-4 border-b border-cyan-500/30 flex justify-between items-center"><h3 className="font-bold text-cyan-200 text-lg flex items-center gap-2"><span className="bg-cyan-600 text-white text-xs px-2 py-1 rounded">2구간</span>AD 27 (십자가) ~ AD 2027 (마지막)</h3><span className="font-mono text-cyan-300 font-bold text-xl">2000년</span></div><div className="p-6"><div className="flex flex-col md:flex-row items-center justify-center gap-4 text-center md:text-left mb-4"><div className="bg-black/40 p-4 rounded-lg border border-gray-700 w-full"><div className="text-gray-500 text-xs mb-1">종료 연도</div><div className="text-2xl font-mono text-white">2027</div></div><div className="text-gray-500 text-2xl font-bold">-</div><div className="bg-black/40 p-4 rounded-lg border border-gray-700 w-full"><div className="text-gray-500 text-xs mb-1">시작 연도</div><div className="text-2xl font-mono text-white">27</div></div><div className="text-gray-500 text-2xl font-bold">=</div><div className="bg-cyan-900/40 p-4 rounded-lg border border-cyan-500 w-full"><div className="text-cyan-300 text-xs mb-1">총 기간</div><div className="text-3xl font-mono text-white font-bold">2000</div></div></div><p className="text-sm text-gray-400 text-center">* 같은 AD 기간 내의 계산이므로 단순 뺄셈으로 정확한 기간이 산출됩니다.<br/>(2027 - 27 = 2000)</p></div></div>
+
+                                    <div className="bg-gradient-to-r from-purple-900/40 to-black p-5 rounded-lg border border-purple-500/50 text-center"><h4 className="text-xl font-bold text-white mb-2">종합 결론</h4><p className="text-purple-200 text-sm md:text-base">"동일한 육각도형이 역사상 3번 반복되는데, 마지막 3번째에 이르러서야 하나님의 달력과 정확히 일치합니다. 이것이 우연일 수학적 확률은 <span className="text-white font-bold text-lg underline">0</span>에 수렴합니다."</p></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // 3.3 CalendarView Component
+        const CalendarView = () => {
+            const [showReferenceImages, setShowReferenceImages] = useState(false);
+            const year = 2026;
+            const months = [1, 2, 3, 4, 5, 6, 7, 8]; 
+            const events = {
+                "2026-02-17": { title: "금환일식", color: "bg-yellow-500/90", textColor: "text-black" },
+                "2026-03-03": { title: "요셉\n블러드문", color: "bg-red-600/90", textColor: "text-white" },
+                "2026-03-27": { title: "휴거\n(하늘나라 입성)", sub: "니산월10일\n요셉+24일", color: "bg-indigo-500/90", textColor: "text-white", span: 2 },
+                "2026-03-31": { title: "유월절,\n혼인잔치", sub: "니산월 14일", color: "bg-green-600/90", textColor: "text-white" },
+                "2026-04-01": { title: "유월절\n(연속)", sub: "무교절 시작", color: "bg-green-600/90", textColor: "text-white" },
+                "2026-08-12": { title: "개기일식", color: "bg-gray-600/90", textColor: "text-white" },
+                "2026-08-28": { title: "베냐민\n블러드문", color: "bg-red-600/90", textColor: "text-white" },
+                "2026-09-11": { title: "나팔절", sub: "티슈리월\n강제접종", color: "bg-purple-600/90", textColor: "text-white", span: 2 },
+                "2026-09-20": { title: "2차휴거\n대속죄일", sub: "티슈리10일", color: "bg-pink-600/90", textColor: "text-white", span: 2 },
+                "2026-09-25": { title: "초막절", sub: "대환란시작", color: "bg-orange-600/90", textColor: "text-white", span: 2 },
+            };
+
+            const today = new Date();
+
+            const renderMonth = (monthIndex) => {
+                const date = new Date(year, monthIndex, 1);
+                const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+                const startDay = date.getDay();
+                const days = [];
+                for (let i = 0; i < startDay; i++) {
+                    days.push(<div key={`empty-${i}`} className="bg-slate-800/20 border-b border-r border-slate-800/50"></div>);
+                }
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dateStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                    const event = events[dateStr];
+                    const currentDayOfWeek = new Date(year, monthIndex, d).getDay();
+                    let dateColorClass = 'text-gray-400';
+                    if (currentDayOfWeek === 0) dateColorClass = 'text-red-400 font-bold'; 
+                    else if (currentDayOfWeek === 6) dateColorClass = 'text-blue-400 font-bold'; 
+
+                    const isToday = today.getFullYear() === year && today.getMonth() === monthIndex && today.getDate() === d;
+                    const cellBg = isToday ? "bg-slate-800 ring-2 ring-cyan-400 z-10" : "hover:bg-slate-800";
+
+                    const yesterdayStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d - 1).padStart(2, '0')}`;
+                    const prevEvent = events[yesterdayStr];
+                    let currentIsSpan = false;
+                    let spanEvent = null;
+                    if (prevEvent && prevEvent.span && prevEvent.span > 1) {
+                        currentIsSpan = true;
+                        spanEvent = prevEvent;
+                    }
+
+                    let content = null;
+                    if (event) {
+                        content = <div className={`mt-0.5 p-1 rounded-sm text-[10px] sm:text-xs font-bold leading-tight ${event.color} ${event.textColor} shadow-md text-center w-full h-full flex flex-col justify-center items-center`}><div className="whitespace-pre-wrap break-keep">{event.title}</div>{event.sub && <div className="text-[9px] opacity-90 font-normal mt-0.5 whitespace-pre-wrap break-keep leading-tight">{event.sub}</div>}</div>;
+                    } else if (currentIsSpan && spanEvent) {
+                        content = <div className={`mt-0.5 p-1 rounded-sm text-[10px] sm:text-xs font-bold leading-tight ${spanEvent.color} ${spanEvent.textColor} opacity-90 shadow-md text-center w-full h-full flex flex-col justify-center items-center`}><div className="whitespace-pre-wrap break-keep">{spanEvent.title} (연속)</div></div>;
+                    }
+
+                    days.push(
+                        <div key={d} className={`h-24 border-b border-r border-slate-700/50 p-1 relative flex flex-col justify-start transition-colors group ${cellBg}`}>
+                            <div className="flex justify-between items-start">
+                                <span className={`text-xs pl-1 pt-0.5 ${dateColorClass}`}>{d}</span>
+                                {isToday && <span className="bg-cyan-500 text-white text-[9px] px-1 rounded-sm font-bold animate-pulse shadow-glow">현재날짜</span>}
+                            </div>
+                            <div className="flex-grow flex items-center justify-center pt-1">{content}</div>
+                        </div>
+                    );
+                }
+                return (
+                    <div key={monthIndex} className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col h-full hover:border-slate-500 transition-colors duration-300">
+                        <div className="bg-[#0b0f19] py-3 px-4 text-center border-b border-slate-700 flex justify-between items-center"><div className="text-xs text-gray-500 font-bold">{year}</div><h3 className="text-lg font-orbitron text-white font-bold tracking-wider">{monthIndex + 1}월</h3><div className="w-8"></div></div>
+                        <div className="grid grid-cols-7 text-center bg-[#111827] text-[10px] text-gray-500 py-1.5 font-bold tracking-wider border-b border-slate-800"><div className="text-red-500">SUN</div><div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div className="text-blue-500">SAT</div></div>
+                        <div className="grid grid-cols-7 bg-[#0f172a] flex-grow">{days}</div>
+                    </div>
+                );
+            };
+
+            const ImageUploader = ({ id, title, defaultImage }) => {
+                const [imageData, setImageData] = useState(null);
+                
+                useEffect(() => { 
+                    const saved = localStorage.getItem(`custom_img_${id}_v3`); // Updated key to _v3
+                    if (saved) {
+                        setImageData(saved); 
+                    } else if (defaultImage) {
+                        setImageData(defaultImage);
+                    }
+                }, [id, defaultImage]);
+                
+                const handleFileChange = async (e) => { 
+                    const file = e.target.files?.[0]; 
+                    if (file) { 
+                        try {
+                            const base64 = await compressImage(file, 1200, 0.75);
+                            setImageData(base64); 
+                            localStorage.setItem(`custom_img_${id}_v3`, base64); // Updated key to _v3
+                        } catch(err) {
+                            console.error("Image processing error", err);
+                        }
+                    } 
+                };
+                
+                const handleRemove = () => { 
+                    playClickSound(); 
+                    localStorage.removeItem(`custom_img_${id}_v3`); // Updated key to _v3
+                    // If there was a default image, revert to it, otherwise null
+                    if (defaultImage) {
+                        setImageData(defaultImage);
+                    } else {
+                        setImageData(null);
+                    }
+                };
+                
+                return (
+                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-600 w-full max-w-3xl mx-auto mb-8">
+                        <h3 className="text-yellow-400 font-bold mb-3 text-center text-lg">{title}</h3>
+                        {imageData ? (
+                            <div className="relative group">
+                                <img 
+                                    src={imageData.startsWith('data:') ? imageData : imageData} 
+                                    alt={title} 
+                                    className="w-full h-auto rounded shadow-lg border border-slate-500" 
+                                    onError={(e) => { 
+                                        e.currentTarget.style.display = 'none'; 
+                                        // Force clear local storage if error, as it might be stale data
+                                        localStorage.removeItem(`custom_img_${id}_v3`);
+                                        e.currentTarget.nextElementSibling.nextElementSibling.style.display = 'flex'; // Show placeholder
+                                    }} 
+                                />
+                                <button onClick={handleRemove} className="absolute top-2 right-2 bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded shadow opacity-0 group-hover:opacity-100 transition-opacity">삭제 / 변경</button>
+                                
+                                {/* Fallback UI hidden by default */}
+                                <div className="hidden w-full h-48 bg-slate-900 border-2 border-dashed border-red-500/50 rounded flex-col items-center justify-center text-slate-400 relative">
+                                    <div className="text-4xl mb-2">⚠️</div>
+                                    <div className="text-red-400 font-bold text-sm">이미지 파일을 찾을 수 없습니다</div>
+                                    <div className="text-xs text-gray-500 mt-1">{decodeURIComponent(defaultImage || '')}</div>
+                                    <p className="text-[10px] text-gray-600 mt-2">위 숫자 파일명의 이미지를 같은 폴더에 넣어주세요</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="w-full h-48 bg-slate-900 border-2 border-dashed border-slate-600 rounded flex flex-col items-center justify-center text-slate-400 hover:bg-slate-800 transition-colors relative cursor-pointer group">
+                                <input type="file" accept="image/*" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" /><p className="font-bold text-sm">클릭하여 이미지 업로드</p>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            return (
+                <>
+                    <div className="flex justify-center mb-6">
+                        <button onClick={() => { playClickSound(); setShowReferenceImages(true); }} className="w-full md:w-auto px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-lg shadow-lg flex items-center justify-center gap-2 transform transition-all hover:scale-105">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                            자료실 (Reference Images)
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-4 animate-fadeIn relative">{months.map(m => renderMonth(m))}</div>
+                    {showReferenceImages && <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn"><div className="bg-slate-900 w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-600 shadow-2xl relative"><button onClick={() => { playClickSound(); setShowReferenceImages(false); }} className="absolute top-4 right-4 bg-red-600 hover:bg-red-700 text-white rounded-full p-2 z-10 shadow-lg sticky"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button><div className="p-8"><h2 className="text-2xl font-bold text-white mb-2 text-center">관련 참조 자료</h2><p className="text-center text-gray-400 mb-8 text-xs md:text-sm bg-slate-800 p-2 rounded">※ 깃허브에 업로드된 기본 이미지가 자동으로 표시됩니다. 추가로 이미지를 업로드하면 내 기기에만 저장됩니다.</p><div className="flex flex-col items-center"><ImageUploader id="img_3mar" title="1. 요셉 24일 후 첫번째 휴거 (3월 달력)" defaultImage="1.png" /><ImageUploader id="img_9sep" title="2. 베냐민 24일 후 두번째 휴거 (9월 달력)" defaultImage="2.png" /><ImageUploader id="img_tribulation" title="3. 대환란의 시간의 순서 (계시록 14장)" defaultImage="3.png" /><ImageUploader id="img_seals" title="4. 요엘2장, 계시록6장" defaultImage="4.png" /><ImageUploader id="img_sky_earth" title="5. 하늘 달력 / 땅의 달력 연결" defaultImage="5.png" /></div></div></div></div>}
+                </>
+            );
+        };
+
+        // 3.4 DDay Calculator Component
+        const DDayCalculator = () => {
+            const [referenceDate, setReferenceDate] = useState(getLocalDateString());
+            const calculateDDay = (target) => { const ref = new Date(referenceDate).getTime(); const t = new Date(target).getTime(); const diffDays = Math.ceil((t - ref) / (1000 * 60 * 60 * 24)); return diffDays === 0 ? "D-Day" : diffDays > 0 ? `D-${diffDays}` : `D+${Math.abs(diffDays)}`; };
+            
+            const springEvents = [
+                { name: "금환일식", desc: "2월 17일 금환일식", date: "2026-02-17" },
+                { name: "요셉 블러드문", desc: "3월 3일 요셉 블러드문", date: "2026-03-03", highlight: true, nameColorClass: "text-red-500" },
+                { name: "니산월 10일 (1)", desc: <span>3월 27일 니산월 10일 / 샤밧 하가돌 / <strong className="text-2xl text-yellow-400 font-extrabold animate-pulse">첫 번째 휴거</strong></span>, date: "2026-03-27", highlight: true, nameColorClass: "text-yellow-400" },
+                { name: "니산월 10일 (2)", desc: "3월 28일 니산월 10일 (둘째 날)", date: "2026-03-28" },
+                { name: "유월절 (1)", desc: <span>3월 31일 니산월 14일 유월절 / <strong className="text-xl text-green-400 font-bold">혼인잔치</strong> (시작일)</span>, date: "2026-03-31", highlight: true, nameColorClass: "text-green-400" },
+                { name: "유월절 (2)", desc: "4월 1일 니산월 14일 유월절 (둘째 날)", date: "2026-04-01" },
+            ];
+            
+            const fallEvents = [
+                { name: "개기일식", desc: "8월 12일 개기일식", date: "2026-08-12" },
+                { name: "베냐민 블러드문", desc: "8월 28일 베냐민 블러드문", date: "2026-08-28", highlight: true, nameColorClass: "text-red-500" },
+                { name: "나팔절 (1)", desc: "9월 11일 나팔절 / 강제접종 시작 (시작일)", date: "2026-09-11" },
+                { name: "나팔절 (2)", desc: "9월 12일 나팔절 (둘째 날)", date: "2026-09-12" },
+                { name: "대속죄일 (1)", desc: <span>9월 20일 대속죄일 / <strong className="text-2xl text-yellow-400 font-extrabold animate-pulse">두번째 휴거</strong> (베냐민 블러드문으로부터 24일째)</span>, date: "2026-09-20", highlight: true, nameColorClass: "text-yellow-400" },
+                { name: "대속죄일 (2)", desc: "9월 21일 대속죄일 (둘째 날)", date: "2026-09-21" },
+                { name: "초막절 (1)", desc: "9월 25일 초막절 / 일곱 나팔 재앙 시작 (시작일)", date: "2026-09-25" },
+                { name: "초막절 (2)", desc: "9월 26일 초막절 (둘째 날)", date: "2026-09-26" },
+            ];
+
+            const renderTable = (title, events) => (
+                <div className="mb-8 animate-fadeIn">
+                  <h3 className="text-xl font-orbitron font-bold text-white mb-4 border-l-4 border-cyan-500 pl-3">{title}</h3>
+                  <div className="overflow-x-auto rounded-lg border border-space-700 shadow-xl">
+                    <table className="w-full text-sm text-left text-gray-300">
+                      <thead className="text-xs uppercase bg-space-800 text-gray-400"><tr><th className="px-6 py-3 border-b border-space-700 w-1/4">구분</th><th className="px-6 py-3 border-b border-space-700 w-1/2">설명</th><th className="px-6 py-3 border-b border-space-700 text-center">양력 날짜</th><th className="px-6 py-3 border-b border-space-700 text-center text-cyan-400">남은 일수 (D-Day)</th></tr></thead>
+                      <tbody>{events.map((item, index) => { const dDay = calculateDDay(item.date); const isPast = dDay.startsWith("D+"); const isToday = dDay === "D-Day"; return (<tr key={index} className={`border-b border-space-700 hover:bg-space-700/50 transition-colors ${item.highlight ? 'bg-space-800/30' : 'bg-space-900'}`}><td className={`px-6 py-4 font-bold ${item.nameColorClass || 'text-gray-200'}`}>{item.name}</td><td className="px-6 py-4 text-gray-400">{item.desc}</td><td className="px-6 py-4 text-center font-mono">{item.date}</td><td className={`px-6 py-4 text-center font-bold font-mono ${isPast ? 'text-gray-600' : (isToday ? 'text-red-500 animate-pulse' : 'text-cyan-400')}`}>{dDay}</td></tr>); })}</tbody>
+                    </table>
+                  </div>
+                </div>
+            );
+
+            return (
+                <div className="max-w-5xl mx-auto px-4 py-8">
+                    <div className="bg-space-800 p-6 rounded-xl border border-space-600 mb-10 shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 right-[-10px] h-full w-[40%] md:w-[35%] opacity-20 pointer-events-none flex items-center justify-end pr-4 gap-4 overflow-visible z-0">
+                             <div className="relative w-24 h-24 md:w-32 md:h-32 shrink-0 animate-[float_6s_ease-in-out_infinite]"><div className="absolute inset-0 rounded-full bg-yellow-500 blur-xl opacity-40"></div><div className="absolute inset-2 rounded-full border-[3px] border-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.8)]"></div><div className="absolute inset-3 rounded-full bg-black border border-yellow-600/50 shadow-inner"></div></div>
+                             <div className="relative w-24 h-24 md:w-32 md:h-32 shrink-0 animate-[float_7s_ease-in-out_infinite_reverse]"><div className="absolute inset-0 rounded-full bg-red-900 blur-xl opacity-30"></div><div className="absolute inset-1 rounded-full bg-gradient-to-br from-red-600 to-red-950 shadow-[0_0_20px_rgba(220,38,38,0.5)] overflow-hidden"><div className="absolute top-1/4 left-1/4 w-1/3 h-1/3 rounded-full bg-black/20 blur-sm"></div><div className="absolute bottom-1/3 right-1/4 w-1/4 h-1/4 rounded-full bg-black/30 blur-sm"></div><div className="absolute top-1/2 right-1/2 w-1/5 h-1/5 rounded-full bg-black/10 blur-[1px]"></div></div></div>
+                        </div>
+                        <div className="relative z-10 w-full md:w-[85%]">
+                            <h2 className="text-3xl font-bold text-white mb-2 font-orbitron">2026년 일정 D-Day 계산기</h2>
+                            <p className="text-gray-400 mb-6 text-sm leading-relaxed">기준일을 설정하면 주요 천문 현상 및 절기까지 남은 날짜를 자동으로 계산합니다.<br/>기본값은 현재 접속하신 날짜입니다.</p>
+                            <div className="flex flex-wrap items-center gap-4 bg-space-900/80 backdrop-blur-sm p-4 rounded-lg border border-space-700 inline-flex shadow-lg"><label className="text-gray-300 font-bold">기준일 선택:</label><input type="date" value={referenceDate} onChange={(e) => setReferenceDate(e.target.value)} className="bg-space-800 text-white border border-gray-600 rounded px-3 py-2 focus:outline-none focus:border-cyan-500 transition-colors" /><button onClick={() => { playClickSound(); setReferenceDate(getLocalDateString()); }} className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded font-bold transition-colors text-sm shadow-lg flex items-center gap-1">오늘로 설정</button></div>
+                        </div>
+                    </div>
+                    {renderTable("상반기 일정 (2026)", springEvents)}
+                    {renderTable("하반기 일정 (2026)", fallEvents)}
+                    <div className="text-center text-gray-500 text-xs mt-8 p-4 border-t border-space-800">* 히브리력 날짜는 관측 및 계산 방식에 따라 1일 정도 차이가 있을 수 있습니다.<br/>* 본 계산기의 날짜는 앱 내의 [대칭 구조 분석] 데이터와 동일한 기준으로 적용되었습니다.</div>
+                </div>
+            );
+        };
+
+        // --- 4. Main App ---
+        const App = () => {
+            const [viewMode, setViewMode] = useState('GRAPH');
+            const downloadSource = async () => {
+                playClickSound();
+                const zip = new JSZip();
+                const htmlContent = document.documentElement.outerHTML;
+                zip.file("index.html", "<!DOCTYPE html>" + htmlContent);
+                const content = await zip.generateAsync({ type: "blob" });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(content);
+                link.download = "cosmos-project-full.zip";
+                link.click();
+            };
+
+            return (
+                <div className="min-h-screen bg-space-900 text-gray-100 font-sans selection:bg-cyan-500 selection:text-white pb-20">
+                    <header className="border-b border-space-700 bg-space-900/80 backdrop-blur-md sticky top-0 z-50">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 md:h-16 flex flex-col md:flex-row items-center justify-between gap-2 md:gap-0">
+                            <div className="flex items-center gap-2 cursor-pointer self-start md:self-auto" onClick={() => { playClickSound(); setViewMode('GRAPH'); }}>
+                                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-400 to-red-500 animate-pulse shadow-lg shadow-orange-500/20"></div>
+                                <h1 className="text-xl font-orbitron font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-gray-100 to-gray-400">ASTRO<span className="text-cyan-400">SYMMETRY</span></h1>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 md:gap-4 w-full md:w-auto">
+                                <button onClick={() => { playClickSound(); setViewMode('GRAPH'); }} className={`px-2 py-1.5 md:px-4 md:py-2 rounded text-[10px] md:text-sm font-bold transition-all border whitespace-nowrap ${viewMode === 'GRAPH' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-100' : 'bg-transparent border-transparent text-gray-400 hover:text-white hover:bg-space-800'}`}>대칭 구조</button>
+                                <button onClick={() => { playClickSound(); setViewMode('CALENDAR'); }} className={`px-2 py-1.5 md:px-4 md:py-2 rounded text-[10px] md:text-sm font-bold transition-all border whitespace-nowrap ${viewMode === 'CALENDAR' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-100' : 'bg-transparent border-transparent text-gray-400 hover:text-white hover:bg-space-800'}`}>2026 달력</button>
+                                <button onClick={() => { playClickSound(); setViewMode('CALCULATOR'); }} className={`px-2 py-1.5 md:px-4 md:py-2 rounded text-[10px] md:text-sm font-bold transition-all border whitespace-nowrap flex items-center gap-1 ${viewMode === 'CALCULATOR' ? 'bg-cyan-900/50 border-cyan-500 text-cyan-100' : 'bg-transparent border-transparent text-gray-400 hover:text-white hover:bg-space-800'}`}>D-Day 계산기</button>
+                            </div>
+                        </div>
+                    </header>
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+                        {viewMode === 'GRAPH' && <Visualization />}
+                        {viewMode === 'GRAPH' && <Analysis />}
+                        {viewMode === 'CALENDAR' && <CalendarView />}
+                        {viewMode === 'CALCULATOR' && <DDayCalculator />}
+                    </main>
+                    <footer className="max-w-7xl mx-auto px-4 py-8 text-center text-gray-600 text-xs border-t border-space-800">
+                        <button onClick={downloadSource} className="inline-flex items-center gap-2 px-4 py-2 bg-space-800 hover:bg-space-700 text-gray-300 rounded border border-gray-600 transition-colors"><span className="text-lg">📂</span><span>전체 소스코드 다운로드 (Single File)</span></button>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
